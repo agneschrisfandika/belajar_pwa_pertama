@@ -356,6 +356,39 @@ body.dark-mode .point-row.out .pi{background:rgba(220,38,38,.15);}
 .dragger{width:40px;height:4px;background:var(--gray-300);border-radius:10px;margin:0 auto 16px;}
 
 .swatch{width:18px;height:18px;border-radius:5px;display:inline-block;vertical-align:middle;margin-right:6px;}
+
+/* ---------- In-app Questionnaire (preview + fill) ---------- */
+.q-card{
+  background:var(--surface);border:1px solid var(--border-col);border-radius:var(--radius-md);padding:15px;margin-bottom:12px;
+}
+.q-card .q-num{font-size:11px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.4px;}
+.q-card .q-text{font-size:13.5px;font-weight:600;margin:5px 0 12px;line-height:1.45;}
+.q-options{display:flex;flex-direction:column;gap:8px;}
+.q-option{
+  display:flex;align-items:center;gap:11px;border:1.5px solid var(--border-col);border-radius:var(--radius-sm);
+  padding:10px 12px;cursor:pointer;font-size:13px;font-weight:500;transition:.15s;
+}
+.q-option:active{transform:scale(.99);}
+.q-option .radio-dot{
+  width:18px;height:18px;border-radius:50%;border:2px solid var(--gray-300);flex:none;position:relative;transition:.15s;
+}
+.q-option.selected{border-color:var(--gold);background:var(--gold-soft);}
+body.dark-mode .q-option.selected{background:rgba(212,175,55,.12);}
+.q-option.selected .radio-dot{border-color:var(--gold);}
+.q-option.selected .radio-dot::after{
+  content:'';position:absolute;inset:3px;border-radius:50%;background:var(--gold);
+}
+.q-option .opt-score{font-weight:700;color:var(--gold);margin-right:2px;}
+.questionnaire-meta{
+  background:var(--gray-50);border:1px dashed var(--gray-300);border-radius:var(--radius-sm);padding:12px 14px;font-size:12.5px;color:var(--text-sub);margin-bottom:14px;
+}
+body.dark-mode .questionnaire-meta{background:var(--gray-100);}
+.questionnaire-meta b{color:var(--text-main);}
+.scale-legend-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.scale-legend-chip{font-size:11px;font-weight:600;background:var(--surface);border:1px solid var(--border-col);padding:4px 9px;border-radius:30px;}
+.fill-progress-sticky{
+  position:sticky;top:0;background:var(--bg);padding-bottom:10px;z-index:5;
+}
 </style>
 </head>
 
@@ -515,8 +548,22 @@ body.dark-mode .point-row.out .pi{background:rgba(220,38,38,.15);}
         <label class="field-label">Jumlah Responden Dibutuhkan</label>
         <input type="number" id="up-count" class="input-academic" placeholder="cth. 30" min="1">
 
-        <label class="field-label">Link Kuesioner</label>
-        <input type="text" id="up-link" class="input-academic" placeholder="https://forms.gle/...">
+        <label class="field-label">Teks Kuesioner <span style="font-weight:400;">(tempel format kuesioner di sini)</span></label>
+        <textarea id="up-questionnaire-raw" class="input-academic" style="min-height:160px;font-family:'Courier New',monospace;font-size:12.5px;" placeholder="KUESIONER PENENTUAN BOBOT KRITERIA
+skala: 4
+bobot: 4 = Sangat Penting 3 = Penting 2 = Tidak Penting 1 = Sangat Tidak Penting
+Petunjuk Pengisian:
+Berikan penilaian terhadap tingkat kepentingan setiap kriteria...
+
+1. Seberapa penting biaya sewa akomodasi...?
+2. Seberapa penting jarak akomodasi ke kampus...?
+3. ..."></textarea>
+        <div class="field-error" id="err-up-parse">Format kuesioner tidak terbaca. Pastikan ada baris "skala:", "bobot:", dan daftar pertanyaan bernomor (1. 2. 3. ...).</div>
+
+        <button type="button" class="btn-outline-academic" style="margin-bottom:14px;" onclick="handlePreviewQuestionnaire()"><i class="bi bi-eye"></i> Pratinjau Kuesioner</button>
+
+        <div id="up-questionnaire-preview" style="display:none;"></div>
+
         <div class="field-error" id="err-up">Lengkapi semua data dengan benar.</div>
 
         <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:11px 13px;font-size:12px;color:var(--text-sub);margin:6px 0 14px;border:1px dashed var(--gray-300);">
@@ -607,6 +654,15 @@ body.dark-mode .point-row.out .pi{background:rgba(220,38,38,.15);}
       <h3>Detail Survei</h3>
     </div>
     <div class="overlay-body" id="survey-detail-body"></div>
+  </div>
+
+  <!-- OVERLAY: FILL QUESTIONNAIRE (Google-Forms-like, fully in-app) -->
+  <div class="overlay-panel" id="overlay-fill">
+    <div class="overlay-head">
+      <div class="overlay-back" onclick="closeOverlay('fill')"><i class="bi bi-arrow-left"></i></div>
+      <h3 id="fill-overlay-title">Isi Kuesioner</h3>
+    </div>
+    <div class="overlay-body" id="fill-form-body"></div>
   </div>
 
   <!-- OVERLAY: NOTIFICATIONS -->
@@ -739,10 +795,61 @@ async function seedDemoData(){
   dbSet(DB_KEYS.USERS, users);
 
   const surveys = [
-    {id:'s_demo1', ownerId:'u_demo2', title:'Pengaruh Konten TikTok terhadap Perilaku Konsumtif Mahasiswa', description:'Penelitian ini meneliti hubungan antara intensitas penggunaan TikTok dengan kecenderungan belanja impulsif pada mahasiswa.', category:'Psikologi', targetCriteria:'Mahasiswa aktif pengguna TikTok, usia 18-24 tahun', targetCount:40, currentCount:22, link:'https://forms.gle/contoh1', status:'active', createdAt:nowISO()},
-    {id:'s_demo2', ownerId:'u_demo3', title:'Analisis Efisiensi Rantai Pasok UMKM Pasca Pandemi', description:'Mengkaji dampak digitalisasi rantai pasok terhadap efisiensi operasional UMKM di Indonesia.', category:'Ekonomi & Bisnis', targetCriteria:'Mahasiswa atau pelaku UMKM', targetCount:50, currentCount:12, link:'https://forms.gle/contoh2', status:'active', createdAt:nowISO()},
-    {id:'s_demo3', ownerId:'u_demo2', title:'Efektivitas Pembelajaran Daring terhadap Motivasi Belajar', description:'Mengukur sejauh mana metode pembelajaran daring memengaruhi tingkat motivasi belajar mahasiswa S1.', category:'Pendidikan', targetCriteria:'Mahasiswa aktif semester 3-8', targetCount:30, currentCount:30, link:'https://forms.gle/contoh3', status:'completed', createdAt:nowISO()},
-    {id:'s_demo4', ownerId:'u_demo1', title:'Persepsi Mahasiswa terhadap Kesehatan Mental di Lingkungan Kampus', description:'Penelitian deskriptif mengenai kesadaran dan persepsi mahasiswa terhadap isu kesehatan mental.', category:'Kesehatan', targetCriteria:'Mahasiswa aktif segala jurusan', targetCount:35, currentCount:9, link:'https://forms.gle/contoh4', status:'active', createdAt:nowISO()},
+    {id:'s_demo1', ownerId:'u_demo2', title:'Pengaruh Konten TikTok terhadap Perilaku Konsumtif Mahasiswa', description:'Penelitian ini meneliti hubungan antara intensitas penggunaan TikTok dengan kecenderungan belanja impulsif pada mahasiswa.', category:'Psikologi', targetCriteria:'Mahasiswa aktif pengguna TikTok, usia 18-24 tahun', targetCount:40, currentCount:22, status:'active', createdAt:nowISO(),
+      questionnaire:{
+        title:'Kuesioner Perilaku Konsumtif Pengguna TikTok', scaleMax:4,
+        scaleLabels:{4:'Sangat Setuju',3:'Setuju',2:'Tidak Setuju',1:'Sangat Tidak Setuju'},
+        instruction:'Berikan penilaian terhadap pernyataan berikut sesuai pengalamanmu menggunakan TikTok.',
+        questions:[
+          {number:1,text:'Saya sering membeli produk setelah melihatnya di TikTok.'},
+          {number:2,text:'Konten promosi di TikTok memengaruhi keputusan belanja saya.'},
+          {number:3,text:'Saya merasa perlu membeli barang yang sedang tren di TikTok.'},
+          {number:4,text:'Saya menghabiskan lebih banyak uang setelah aktif menggunakan TikTok.'},
+          {number:5,text:'Saya membandingkan harga produk sebelum membeli walau melihatnya di TikTok.'}
+        ]
+      }
+    },
+    {id:'s_demo2', ownerId:'u_demo3', title:'Analisis Efisiensi Rantai Pasok UMKM Pasca Pandemi', description:'Mengkaji dampak digitalisasi rantai pasok terhadap efisiensi operasional UMKM di Indonesia.', category:'Ekonomi & Bisnis', targetCriteria:'Mahasiswa atau pelaku UMKM', targetCount:50, currentCount:12, status:'active', createdAt:nowISO(),
+      questionnaire:{
+        title:'Kuesioner Digitalisasi Rantai Pasok UMKM', scaleMax:4,
+        scaleLabels:{4:'Sangat Penting',3:'Penting',2:'Tidak Penting',1:'Sangat Tidak Penting'},
+        instruction:'Berikan penilaian terhadap tingkat kepentingan setiap aspek digitalisasi rantai pasok berikut.',
+        questions:[
+          {number:1,text:'Seberapa penting penggunaan sistem digital dalam pencatatan stok barang?'},
+          {number:2,text:'Seberapa penting kecepatan pengiriman barang dari pemasok ke UMKM?'},
+          {number:3,text:'Seberapa penting transparansi harga dari pemasok ke pelaku UMKM?'},
+          {number:4,text:'Seberapa penting integrasi pembayaran digital dalam rantai pasok?'},
+          {number:5,text:'Seberapa penting pelatihan digitalisasi bagi pelaku UMKM?'}
+        ]
+      }
+    },
+    {id:'s_demo3', ownerId:'u_demo2', title:'Efektivitas Pembelajaran Daring terhadap Motivasi Belajar', description:'Mengukur sejauh mana metode pembelajaran daring memengaruhi tingkat motivasi belajar mahasiswa S1.', category:'Pendidikan', targetCriteria:'Mahasiswa aktif semester 3-8', targetCount:30, currentCount:30, status:'completed', createdAt:nowISO(),
+      questionnaire:{
+        title:'Kuesioner Motivasi Belajar Daring', scaleMax:4,
+        scaleLabels:{4:'Sangat Setuju',3:'Setuju',2:'Tidak Setuju',1:'Sangat Tidak Setuju'},
+        instruction:'Berikan penilaian terhadap pernyataan mengenai pembelajaran daring berikut.',
+        questions:[
+          {number:1,text:'Saya tetap termotivasi belajar meski kelas dilakukan secara daring.'},
+          {number:2,text:'Pembelajaran daring memudahkan saya mengatur waktu belajar.'},
+          {number:3,text:'Saya lebih mudah fokus saat belajar secara tatap muka dibanding daring.'},
+          {number:4,text:'Interaksi dengan dosen tetap efektif meski dilakukan secara daring.'}
+        ]
+      }
+    },
+    {id:'s_demo4', ownerId:'u_demo1', title:'Persepsi Mahasiswa terhadap Kesehatan Mental di Lingkungan Kampus', description:'Penelitian deskriptif mengenai kesadaran dan persepsi mahasiswa terhadap isu kesehatan mental.', category:'Kesehatan', targetCriteria:'Mahasiswa aktif segala jurusan', targetCount:35, currentCount:9, status:'active', createdAt:nowISO(),
+      questionnaire:{
+        title:'Kuesioner Persepsi Kesehatan Mental Mahasiswa', scaleMax:4,
+        scaleLabels:{4:'Sangat Setuju',3:'Setuju',2:'Tidak Setuju',1:'Sangat Tidak Setuju'},
+        instruction:'Berikan penilaian terhadap pernyataan mengenai kesehatan mental di lingkungan kampus berikut.',
+        questions:[
+          {number:1,text:'Kampus saya menyediakan layanan konseling yang mudah diakses.'},
+          {number:2,text:'Saya merasa nyaman membicarakan masalah kesehatan mental dengan teman.'},
+          {number:3,text:'Tekanan akademik memengaruhi kondisi kesehatan mental saya.'},
+          {number:4,text:'Saya mengetahui tanda-tanda umum gangguan kesehatan mental.'},
+          {number:5,text:'Lingkungan kampus mendukung kesejahteraan mental mahasiswa.'}
+        ]
+      }
+    },
   ];
   dbSet(DB_KEYS.SURVEYS, surveys);
   dbSet(DB_KEYS.RESPONSES, []);
@@ -884,21 +991,144 @@ function saveSurveys(s){ dbSet(DB_KEYS.SURVEYS, s); }
 function getResponses(){ return dbGet(DB_KEYS.RESPONSES, []); }
 function saveResponses(r){ dbSet(DB_KEYS.RESPONSES, r); }
 
+/* ---------------------------------------------------------
+   Questionnaire text parser
+   Converts a pasted plain-text questionnaire (title, skala,
+   bobot legend, petunjuk pengisian, numbered questions) into
+   a structured object so it can be rendered as an in-app
+   Google-Forms-like form — no external link needed.
+--------------------------------------------------------- */
+function parseQuestionnaireText(raw){
+  if(!raw || !raw.trim()) return null;
+  const lines = raw.split('\n').map(l=>l.trim()).filter(l=>l.length>0);
+  if(lines.length===0) return null;
+
+  // Title = first non-empty line that isn't itself a "skala:"/"bobot:" line
+  let title = lines[0];
+
+  // skala: N
+  let scaleMax = 4;
+  const skalaLine = lines.find(l=>/^skala\s*:/i.test(l));
+  if(skalaLine){
+    const m = skalaLine.match(/(\d+)/);
+    if(m) scaleMax = parseInt(m[1]);
+  }
+
+  // Collect every "N = Label" pair found within legend-like lines only
+  // (lines containing at least one "digit = " pattern, excluding numbered
+  // question lines). Matching is scoped per-line so a label can never run
+  // on and swallow unrelated text below it. Later occurrences overwrite
+  // earlier ones, so a fuller legend (e.g. repeated inside the
+  // instructions) wins over a truncated one.
+  const scaleLabels = {};
+  const legendLines = lines.filter(l => /\d\s*=\s*\S/.test(l) && !/^\d{1,3}\.\s*/.test(l));
+  const legendPairRegex = /(\d)\s*=\s*([^\d=]+?)(?=(?:\d\s*=)|$)/g;
+  legendLines.forEach(line=>{
+    let match;
+    legendPairRegex.lastIndex = 0;
+    while((match = legendPairRegex.exec(line)) !== null){
+      const num = parseInt(match[1]);
+      const label = match[2].replace(/petunjuk pengisian\s*:?/i,'').trim().replace(/[.,]$/,'');
+      if(num>=1 && num<=9 && label) scaleLabels[num] = label;
+    }
+  });
+  // Fallback default labels if nothing parsed
+  if(Object.keys(scaleLabels).length===0){
+    for(let i=scaleMax;i>=1;i--) scaleLabels[i] = 'Skala ' + i;
+  }
+
+  // Numbered questions: lines starting with "1." "2." etc.
+  const questions = [];
+  lines.forEach(l=>{
+    const qm = l.match(/^(\d{1,3})\.\s*(.+)$/);
+    if(qm){
+      questions.push({number: parseInt(qm[1]), text: qm[2].trim()});
+    }
+  });
+
+  // Instruction text = lines after "Petunjuk Pengisian" up to first question,
+  // excluding legend-repeat lines (lines containing 2+ "N=" pairs) and label lines.
+  let instruction = '';
+  const petunjukIdx = lines.findIndex(l=>/petunjuk pengisian/i.test(l));
+  if(petunjukIdx !== -1){
+    const firstQIdx = lines.findIndex(l=>/^\d{1,3}\.\s*/.test(l));
+    const endIdx = firstQIdx !== -1 ? firstQIdx : lines.length;
+    const block = lines.slice(petunjukIdx+1, endIdx).filter(l=>{
+      const legendLikeCount = (l.match(/\d\s*=/g)||[]).length;
+      if(legendLikeCount >= 2) return false; // skip legend-repeat lines
+      if(/^skala\s*:/i.test(l) || /^bobot\s*:/i.test(l)) return false;
+      return true;
+    });
+    instruction = block.join(' ');
+  }
+
+  if(questions.length===0) return null; // not a valid questionnaire without questions
+
+  questions.sort((a,b)=>a.number-b.number);
+
+  return { title, scaleMax, scaleLabels, instruction, questions };
+}
+
+function scaleLegendChipsHTML(q){
+  let html = '<div class="scale-legend-row">';
+  for(let i=q.scaleMax;i>=1;i--){
+    html += `<span class="scale-legend-chip"><b>${i}</b> = ${q.scaleLabels[i] || 'Skala '+i}</span>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function handlePreviewQuestionnaire(){
+  const raw = document.getElementById('up-questionnaire-raw').value;
+  const parsed = parseQuestionnaireText(raw);
+  const previewBox = document.getElementById('up-questionnaire-preview');
+
+  if(!parsed){
+    toggleErr('err-up-parse', true);
+    previewBox.style.display='none';
+    return;
+  }
+  toggleErr('err-up-parse', false);
+
+  previewBox.style.display = 'block';
+  previewBox.innerHTML = `
+    <div class="questionnaire-meta">
+      <b>${parsed.title}</b><br>
+      ${parsed.instruction ? parsed.instruction + '<br>' : ''}
+      ${scaleLegendChipsHTML(parsed)}
+    </div>
+    ${parsed.questions.map(q=>`
+      <div class="q-card">
+        <div class="q-num">Pertanyaan ${q.number}</div>
+        <div class="q-text">${q.text}</div>
+        <div class="q-options">
+          ${Array.from({length:parsed.scaleMax}, (_,i)=>parsed.scaleMax-i).map(v=>`
+            <div class="q-option"><div class="radio-dot"></div><span class="opt-score">${v}</span> ${parsed.scaleLabels[v]||''}</div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('')}
+  `;
+  showToast(`Berhasil mendeteksi ${parsed.questions.length} pertanyaan.`,'success');
+}
+
 function handleUploadSurvey(){
   const title = document.getElementById('up-title').value.trim();
   const desc = document.getElementById('up-desc').value.trim();
   const category = document.getElementById('up-category').value;
   const target = document.getElementById('up-target').value.trim();
   const count = parseInt(document.getElementById('up-count').value);
-  const link = document.getElementById('up-link').value.trim();
+  const rawQuestionnaire = document.getElementById('up-questionnaire-raw').value;
 
-  const validLink = /^https?:\/\/.+/.test(link);
+  const parsedQuestionnaire = parseQuestionnaireText(rawQuestionnaire);
 
-  if(!title || !desc || !target || !count || count<1 || !validLink){
+  if(!title || !desc || !target || !count || count<1 || !parsedQuestionnaire){
     toggleErr('err-up', true);
+    if(!parsedQuestionnaire) toggleErr('err-up-parse', true);
     return;
   }
   toggleErr('err-up', false);
+  toggleErr('err-up-parse', false);
 
   const cost = count; // 1 point per respondent requested — barter cost
   if(currentUser.points < cost){
@@ -909,7 +1139,8 @@ function handleUploadSurvey(){
   const surveys = getSurveys();
   surveys.unshift({
     id: uid('s'), ownerId: currentUser.id, title, description:desc, category,
-    targetCriteria: target, targetCount: count, currentCount:0, link, status:'active', createdAt: nowISO()
+    targetCriteria: target, targetCount: count, currentCount:0,
+    questionnaire: parsedQuestionnaire, status:'active', createdAt: nowISO()
   });
   saveSurveys(surveys);
 
@@ -918,7 +1149,9 @@ function handleUploadSurvey(){
   addPointHistory(currentUser.id, 'out', cost, `Publikasi survei: ${title}`);
 
   showToast('Survei berhasil dipublikasikan! 🎓','success');
-  ['up-title','up-desc','up-target','up-count','up-link'].forEach(id=>document.getElementById(id).value='');
+  ['up-title','up-desc','up-target','up-count','up-questionnaire-raw'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('up-questionnaire-preview').style.display='none';
+  document.getElementById('up-questionnaire-preview').innerHTML='';
   renderAll();
   goView('dashboard');
 }
@@ -1061,6 +1294,7 @@ function openSurveyDetail(surveyId){
   const isOwner = s.ownerId === currentUser.id;
   const myResponse = getResponses().find(r=>r.surveyId===s.id && r.userId===currentUser.id);
   const pct = Math.min(100, Math.round((s.currentCount/s.targetCount)*100));
+  const qCount = s.questionnaire ? s.questionnaire.questions.length : 0;
 
   let actionHTML = '';
   if(isOwner){
@@ -1071,20 +1305,20 @@ function openSurveyDetail(surveyId){
         const u = findUserById(r.userId);
         return `<div class="menu-row" style="cursor:default;">
           <div class="avatar-mini" style="width:34px;height:34px;font-size:12px;">${initials(u?u.name:'?')}</div>
-          <div class="txt">${u?u.name:'Mahasiswa'}<div class="sub">Mengisi ${timeAgo(r.submittedAt)}</div></div>
+          <div class="txt">${u?u.name:'Mahasiswa'}<div class="sub">Mengisi ${timeAgo(r.submittedAt)} · pola jawaban perlu ditinjau</div></div>
           <button class="btn-gold" style="width:auto;padding:8px 14px;font-size:12px;" onclick="verifyResponse('${r.id}')">Verifikasi</button>
         </div>`;
       }).join('') : '<div class="empty-state" style="padding:24px;"><p>Belum ada yang mengisi survei ini.</p></div>'}
     `;
   } else if(myResponse){
-    const statusTxt = myResponse.status==='verified' ? 'Sudah diverifikasi ✓ Poin telah ditambahkan' : 'Menunggu verifikasi dari pemilik survei';
+    const statusTxt = myResponse.status==='verified' ? 'Sudah diverifikasi ✓ Poin telah ditambahkan' : 'Jawabanmu sedang ditinjau pemilik survei (pola jawaban terdeteksi seragam)';
     actionHTML = `<div style="background:var(--green-soft);color:#0F766E;padding:13px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-top:20px;">
       <i class="bi bi-check-circle-fill"></i> ${statusTxt}
     </div>`;
   } else if(s.status!=='active'){
     actionHTML = `<div style="background:var(--gray-100);padding:13px;border-radius:var(--radius-sm);font-size:13px;margin-top:20px;color:var(--text-sub);">Survei ini sudah ditutup.</div>`;
   } else {
-    actionHTML = `<button class="btn-gold" style="margin-top:20px;" onclick="startFillSurvey('${s.id}')"><i class="bi bi-box-arrow-up-right"></i> Isi Survei Sekarang</button>`;
+    actionHTML = `<button class="btn-gold" style="margin-top:20px;" onclick="openFillSurvey('${s.id}')"><i class="bi bi-pencil-square"></i> Isi Survei Sekarang</button>`;
   }
 
   document.getElementById('survey-detail-body').innerHTML = `
@@ -1099,6 +1333,9 @@ function openSurveyDetail(surveyId){
       <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--text-sub);margin-bottom:8px;">
         <span><i class="bi bi-people-fill"></i> Target Responden</span><b style="color:var(--text-main);">${s.targetCriteria}</b>
       </div>
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--text-sub);margin-bottom:8px;">
+        <span><i class="bi bi-list-ol"></i> Jumlah Pertanyaan</span><b style="color:var(--text-main);">${qCount} pertanyaan (isi langsung di aplikasi)</b>
+      </div>
       <div class="progress-academic"><div class="bar" style="width:${pct}%;"></div></div>
       <div class="progress-label"><span>${s.currentCount}/${s.targetCount} responden terkumpul</span><span>${pct}%</span></div>
     </div>
@@ -1108,45 +1345,114 @@ function openSurveyDetail(surveyId){
   openOverlay('survey');
 }
 
-function startFillSurvey(surveyId){
+/* ---------------------------------------------------------
+   In-app questionnaire filling (no external link / Google Form)
+--------------------------------------------------------- */
+let fillAnswers = {};
+
+function openFillSurvey(surveyId){
   const s = getSurveys().find(x=>x.id===surveyId);
-  if(!s) return;
-  window.open(s.link, '_blank');
-  // Verification step to reduce careless / fake responses
-  setTimeout(()=>{
-    const confirmFill = confirm('Apakah kamu sudah benar-benar mengisi kuesioner ini dengan jujur dan lengkap?\n\nKlik OK untuk mengirim konfirmasi ke pemilik survei untuk diverifikasi.');
-    if(!confirmFill) return;
+  if(!s || !s.questionnaire) return;
+  fillAnswers = {};
+  const q = s.questionnaire;
 
-    const responses = getResponses();
-    responses.unshift({id:uid('r'), surveyId:s.id, userId:currentUser.id, status:'pending', submittedAt:nowISO()});
-    saveResponses(responses);
-
-    addNotification(s.ownerId, 'new_respondent', `${currentUser.name} mengisi survei "${s.title}" dan menunggu verifikasi kamu.`);
-    showToast('Konfirmasi terkirim! Menunggu verifikasi dari pemilik survei.','success');
-    openSurveyDetail(surveyId);
-    renderAll();
-  }, 400);
+  document.getElementById('fill-overlay-title').textContent = q.title;
+  document.getElementById('fill-form-body').innerHTML = `
+    <div class="questionnaire-meta">
+      ${q.instruction ? q.instruction + '<br>' : ''}
+      ${scaleLegendChipsHTML(q)}
+    </div>
+    <div id="fill-questions-container">
+      ${q.questions.map(qq=>`
+        <div class="q-card">
+          <div class="q-num">Pertanyaan ${qq.number}</div>
+          <div class="q-text">${qq.text}</div>
+          <div class="q-options" id="fill-opts-${qq.number}">
+            ${Array.from({length:q.scaleMax}, (_,i)=>q.scaleMax-i).map(v=>`
+              <div class="q-option" onclick="selectAnswer(${qq.number}, ${v})" id="fill-opt-${qq.number}-${v}">
+                <div class="radio-dot"></div><span class="opt-score">${v}</span> ${q.scaleLabels[v]||''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <button class="btn-gold" style="margin-top:6px;" onclick="submitFillSurvey('${s.id}')"><i class="bi bi-send-check"></i> Kirim Jawaban</button>
+  `;
+  closeOverlay('survey');
+  openOverlay('fill');
 }
 
-function verifyResponse(responseId){
+function selectAnswer(questionNumber, value){
+  fillAnswers[questionNumber] = value;
+  const container = document.getElementById('fill-opts-'+questionNumber);
+  if(!container) return;
+  container.querySelectorAll('.q-option').forEach(el=>el.classList.remove('selected'));
+  const chosen = document.getElementById(`fill-opt-${questionNumber}-${value}`);
+  if(chosen) chosen.classList.add('selected');
+}
+
+function submitFillSurvey(surveyId){
+  const s = getSurveys().find(x=>x.id===surveyId);
+  if(!s || !s.questionnaire) return;
+  const q = s.questionnaire;
+
+  const unanswered = q.questions.filter(qq=>!(qq.number in fillAnswers));
+  if(unanswered.length>0){
+    showToast(`Masih ada ${unanswered.length} pertanyaan yang belum dijawab.`,'error');
+    return;
+  }
+
+  // Anti careless-response check: if every answer is identical (straight-lining),
+  // flag the response for manual verification by the survey owner instead of
+  // awarding points instantly.
+  const values = Object.values(fillAnswers);
+  const isStraightLined = values.every(v=>v===values[0]) && values.length>1;
+
+  const responses = getResponses();
+  const responseId = uid('r');
+  responses.unshift({
+    id:responseId, surveyId:s.id, userId:currentUser.id,
+    status: isStraightLined ? 'pending' : 'verified',
+    answers: {...fillAnswers}, submittedAt:nowISO()
+  });
+  saveResponses(responses);
+
+  if(isStraightLined){
+    addNotification(s.ownerId, 'new_respondent', `${currentUser.name} mengisi survei "${s.title}". Pola jawaban seragam — mohon ditinjau sebelum diverifikasi.`);
+    showToast('Jawaban terkirim. Karena pola jawaban seragam, pemilik survei akan meninjau dulu sebelum poin ditambahkan.','info');
+  } else {
+    // Instantly award points — fulfils the "poin bertambah langsung" requirement
+    finalizeVerifiedResponse(responseId);
+    showToast('Jawaban terkirim & terverifikasi otomatis! Poin langsung bertambah 🎉','success');
+  }
+
+  closeOverlay('fill');
+  fillAnswers = {};
+  renderAll();
+}
+
+/* Shared logic: award points + update survey progress + notify, used by
+   both instant auto-verification and manual owner verification. */
+function finalizeVerifiedResponse(responseId){
   const responses = getResponses();
   const r = responses.find(x=>x.id===responseId);
   if(!r) return;
   r.status = 'verified';
   saveResponses(responses);
 
-  // Award point to respondent
   const respondent = findUserById(r.userId);
   if(respondent){
     respondent.points += 1;
     respondent.filledCount = (respondent.filledCount||0) + 1;
     updateUser(respondent);
     addPointHistory(respondent.id, 'in', 1, 'Verifikasi pengisian survei');
-    addNotification(respondent.id, 'verified', 'Pengisian survei kamu sudah diverifikasi! +1 poin 🎉');
+    if(respondent.id !== currentUser.id){
+      addNotification(respondent.id, 'verified', 'Pengisian survei kamu sudah diverifikasi! +1 poin 🎉');
+    }
     checkBadges(respondent);
   }
 
-  // Update survey progress
   const surveys = getSurveys();
   const s = surveys.find(x=>x.id===r.surveyId);
   if(s){
@@ -1159,9 +1465,13 @@ function verifyResponse(responseId){
     }
     saveSurveys(surveys);
   }
+}
 
+function verifyResponse(responseId){
+  finalizeVerifiedResponse(responseId);
   showToast('Responden berhasil diverifikasi.','success');
-  openSurveyDetail(r.surveyId);
+  const r = getResponses().find(x=>x.id===responseId);
+  if(r) openSurveyDetail(r.surveyId);
   renderAll();
 }
 
