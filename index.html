@@ -751,8 +751,20 @@ Berikan penilaian terhadap tingkat kepentingan setiap kriteria...
 const DB_KEYS = {
   USERS:'sm_users', SESSION:'sm_session', SURVEYS:'sm_surveys',
   RESPONSES:'sm_responses', POINTS:'sm_points_history', NOTIFS:'sm_notifications',
-  FORUM:'sm_forum', DARK:'sm_dark_mode'
+  FORUM:'sm_forum', DARK:'sm_dark_mode', SCHEMA:'sm_schema_version'
 };
+// Bump this whenever the stored data shape changes (e.g. switching surveys
+// from external link-based to in-app questionnaire-based). On mismatch,
+// old incompatible data is cleared automatically so the app never gets
+// stuck with "empty" surveys created under an older version.
+const CURRENT_SCHEMA_VERSION = 2;
+function runSchemaMigration(){
+  const stored = localStorage.getItem(DB_KEYS.SCHEMA);
+  if(stored !== String(CURRENT_SCHEMA_VERSION)){
+    Object.values(DB_KEYS).forEach(k=>{ if(k!==DB_KEYS.SCHEMA) localStorage.removeItem(k); });
+    localStorage.setItem(DB_KEYS.SCHEMA, String(CURRENT_SCHEMA_VERSION));
+  }
+}
 function dbGet(key, fallback){
   try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
   catch(e){ return fallback; }
@@ -1224,13 +1236,13 @@ function renderDashboard(){
 }
 
 function renderLeaderboardMini(){
-  const users = [...getUsers()].sort((a,b)=>b.collectedCountLive() - a.collectedCountLive()).slice(0,3);
+  const users = [...getUsers()].sort((a,b)=>liveCollectedCount(b.id) - liveCollectedCount(a.id)).slice(0,3);
   document.getElementById('dash-leaderboard-mini').innerHTML = users.map((u,i)=>`
     <div class="lb-row top${i+1}">
       <div class="lb-rank">#${i+1}</div>
       <div class="avatar-mini" style="width:30px;height:30px;font-size:11px;">${initials(u.name)}</div>
       <div class="lb-name"><b>${u.name}</b><span>${u.university}</span></div>
-      <div class="lb-pts">${u.filledCountLive()} bantu</div>
+      <div class="lb-pts">${liveFilledCount(u.id)} bantu</div>
     </div>
   `).join('');
 }
@@ -1242,7 +1254,8 @@ function liveFilledCount(userId){
 function liveCollectedCount(userId){
   return getSurveys().filter(s=>s.ownerId===userId).reduce((a,s)=>a+s.currentCount,0) + (findUserById(userId)?.collectedCount||0);
 }
-// attach convenience methods used above
+// Kept for backward compatibility; no longer relied upon for rendering
+// (see liveFilledCount / liveCollectedCount above, called directly instead).
 function patchUserHelpers(){
   getUsers().forEach(u=>{
     u.filledCountLive = ()=>liveFilledCount(u.id);
@@ -1352,7 +1365,11 @@ let fillAnswers = {};
 
 function openFillSurvey(surveyId){
   const s = getSurveys().find(x=>x.id===surveyId);
-  if(!s || !s.questionnaire) return;
+  if(!s) return;
+  if(!s.questionnaire || !s.questionnaire.questions || s.questionnaire.questions.length===0){
+    showToast('Survei ini belum memiliki data kuesioner yang valid. Coba muat ulang halaman atau hubungi pemilik survei.','error');
+    return;
+  }
   fillAnswers = {};
   const q = s.questionnaire;
 
@@ -1726,6 +1743,7 @@ function renderAll(){
    17. APP INIT
 ========================================================= */
 async function initApp(){
+  runSchemaMigration();
   await seedDemoData();
   applyStoredDarkMode();
 
